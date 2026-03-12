@@ -9,16 +9,26 @@ RUN apt-get update && \
     curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
     apt-get install -y nodejs
 
-# Copy EVERYTHING at once (avoids path issues)
+# Copy everything
 COPY . /app/
+
+# Debug: show what was copied (check Railway logs)
+RUN echo "=== FILES IN /app ===" && ls -la /app/ && echo "=== END ==="
 
 # Python deps
 RUN pip install --no-cache-dir -r /app/requirements.txt && \
     python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('punkt_tab')"
 
-# Build React frontend
-RUN cd /app/frontend && npm install && npm run build && \
-    cp -r /app/frontend/build /app/build
+# Build React frontend (create inline if frontend/ folder is missing)
+RUN if [ -d "/app/frontend" ] && [ -f "/app/frontend/package.json" ]; then \
+      echo "Frontend folder found, building React..."; \
+      cd /app/frontend && npm install && npm run build && \
+      cp -r /app/frontend/build /app/build; \
+    else \
+      echo "No frontend folder — creating minimal index.html..."; \
+      mkdir -p /app/build && \
+      echo '<!DOCTYPE html><html><head><meta charset="utf-8"><title>AI Sentiment Analyzer</title></head><body><div id="root">Frontend not built. Push frontend/ folder to Git.</div></body></html>' > /app/build/index.html; \
+    fi
 
 EXPOSE 5000
 
