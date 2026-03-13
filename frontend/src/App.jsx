@@ -1,9 +1,38 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend } from "recharts";
 
-// DEV: hardcoded to Flask port. Change to window.location.origin for production.
-const API = "http://localhost:5000";
+const API = window.location.origin;
 const LABELS = ["positive","neutral","negative"];
+
+// Maps backend model keys → frontend MODELS_REF ids
+const KEY_MAP = {
+  "logistic_regression_tfidf": "lr_tfidf",
+  "logistic_regression_bow":   "lr_bow",
+  "naive_bayes_tfidf":         "nb_tfidf",
+  "naive_bayes_bow":           "nb_bow",
+  "random_forest_tfidf":       "rf_tfidf",
+  "random_forest_bow":         "rf_bow",
+  "feedforward_nn_tfidf":      "ffnn_tfidf",
+  "feedforward_nn_bow":        "ffnn_bow",
+  "roberta_transformer":       "roberta",
+};
+
+function remapPreds(raw) {
+  return Object.fromEntries(
+    Object.entries(raw).map(([k, v]) => [
+      KEY_MAP[k] || k,
+      { ...v, confidence: v.confidence || 0.5, sentiment: v.sentiment || "neutral" }
+    ])
+  );
+}
+
+function ratingToSentiment(rating) {
+  const r = parseInt(rating);
+  if (isNaN(r)) return null;
+  if (r <= 2) return "negative";
+  if (r === 3) return "neutral";
+  return "positive";
+}
 
 const MODELS_REF = [
   { id:"roberta",    name:"RoBERTa Transformer",       short:"RoBERTa",vec:"Contextual",acc:0.9410,p:0.94,r:0.93,f1:0.935,transformer:true },
@@ -102,8 +131,8 @@ export default function App(){
       const resp=await fetch(`${API}/api/predict`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:input})});
       if(resp.ok){
         const data=await resp.json();
-        const allPreds=data.models||{};
-        addReview({id:Date.now(),text:input,sentiment:data.ensemble?.sentiment||"neutral",confidence:data.ensemble?.confidence||0.5,probs:allPreds[selModel]?.all_scores||{},allPreds,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual"});
+        const allPreds=remapPreds(data.models||{});
+        addReview({id:Date.now(),text:input,sentiment:data.ensemble?.sentiment||"neutral",confidence:data.ensemble?.confidence||0.5,probs:allPreds[selModel]?.all_scores||{},allPreds,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual",groundTruth:null});
       }else{throw new Error("API error");}
     }catch(e){
       // Fallback to local
@@ -123,14 +152,16 @@ export default function App(){
       if(data.error){setScrapeMsg(`Error: ${data.error}`);setScraping(false);return;}
       if(data.warning){setScrapeMsg(data.warning);}
       const revs=(data.reviews||[]).map((r,i)=>{
-        const allPreds=r.predictions||{};
-        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,author:r.author,probs:{},allPreds,type:"scraped",source:r.source||scrapeSrc,ts:new Date().toLocaleTimeString(),primaryModel:"roberta"};
+        const allPreds=remapPreds(r.predictions||{});
+        const groundTruth=ratingToSentiment(r.rating);
+        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,author:r.author,probs:{},allPreds,type:"scraped",source:r.source||scrapeSrc,ts:new Date().toLocaleTimeString(),primaryModel:"roberta",groundTruth,demo:data.demo||false};
       });
       if(revs.length===0){
         setScrapeMsg(`No reviews found. ${data.warning||"Try a different query or source."}`);
       }else{
         addReviews(revs);
-        setScrapeMsg(`Found ${revs.length} real reviews from ${scrapeSrc}!`);
+        if(data.demo){setScrapeMsg(`⚠️ Live scraping blocked by ${scrapeSrc} on Railway. Loaded ${revs.length} demo reviews for demonstration.`);}
+        else{setScrapeMsg(`✅ Found ${revs.length} real reviews from ${scrapeSrc}!`);}
       }
     }catch(e){
       setScrapeMsg(`Network error: ${e.message}. Make sure backend is running.`);
@@ -150,8 +181,9 @@ export default function App(){
       const data=await resp.json();
       if(data.error){setUploadMsg(`Error: ${data.error}`);setUploading(false);return;}
       const revs=(data.reviews||[]).map((r,i)=>{
-        const allPreds=r.predictions||{};
-        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,probs:{},allPreds,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta"};
+        const allPreds=remapPreds(r.predictions||{});
+        const groundTruth=ratingToSentiment(r.rating);
+        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,probs:{},allPreds,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta",groundTruth};
       });
       addReviews(revs);
       setUploadMsg(`Analyzed ${revs.length} reviews from ${file.name} (${data.total_rows} total rows). Columns: ${data.columns_found?.join(", ")}`);
@@ -200,11 +232,11 @@ export default function App(){
       totalConf+=rev.confidence||0;
       const c=rev.confidence||0.5;
       if(c<0.6)confBuckets["0.5-0.6"]++;else if(c<0.7)confBuckets["0.6-0.7"]++;else if(c<0.8)confBuckets["0.7-0.8"]++;else if(c<0.9)confBuckets["0.8-0.9"]++;else confBuckets["0.9-1.0"]++;
-      // Build confusion matrices per model
-      const trueSent=rev.sentiment;
-      if(rev.allPreds){
+      // Use groundTruth (from rating) as true label — not rev.sentiment which is the model's own prediction
+      const trueSent=rev.groundTruth||null;
+      if(trueSent&&rev.allPreds){
         for(const[mid,pred]of Object.entries(rev.allPreds)){
-          if(modelCM[mid]&&pred?.sentiment){
+          if(modelCM[mid]&&pred?.sentiment&&trueSent){
             modelCM[mid][trueSent]=modelCM[mid][trueSent]||{};
             modelCM[mid][trueSent][pred.sentiment]=(modelCM[mid][trueSent][pred.sentiment]||0)+1;
           }
@@ -379,7 +411,7 @@ export default function App(){
                     <td style={{padding:"8px",color:P.white,fontWeight:m.transformer||m.paperBest?700:400}}>{m.name}{m.transformer&&<span style={{fontSize:7,color:P.iSoft,background:`${P.indigo}18`,padding:"1px 5px",borderRadius:6,marginLeft:4}}>NEW</span>}{m.paperBest&&<span style={{fontSize:7,color:P.green,background:`${P.green}14`,padding:"1px 5px",borderRadius:6,marginLeft:4}}>BEST</span>}</td>
                     <td style={{textAlign:"center",padding:"8px",color:P.sub,fontSize:10}}>{m.vec}</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.muted}}>{(m.acc*100).toFixed(2)}%</td>
-                    <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",fontWeight:700,color:s.liveAcc>=0.8?P.green:s.liveAcc>=0.6?P.amber:P.red}}>{(s.liveAcc*100).toFixed(1)}%</td>
+                    <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",fontWeight:700,color:s.liveAcc>=0.8?P.green:s.liveAcc>=0.6?P.amber:P.red}}>{s.liveAcc!==null&&s.total>0?`${(s.liveAcc*100).toFixed(1)}%`:'N/A'}</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wP*100).toFixed(1)}%</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wR*100).toFixed(1)}%</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wF*100).toFixed(1)}%</td>
