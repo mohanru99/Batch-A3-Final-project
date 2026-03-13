@@ -56,6 +56,201 @@ LABELS = ['negative', 'neutral', 'positive']
 stemmer = PorterStemmer()
 stop_words = set(stopwords.words('english'))
 
+# ═══════════════════════════════════
+# BUILT-IN SEED DATASET — trains on startup, no CSV needed
+# 150 reviews: 50 per class
+# ═══════════════════════════════════
+SEED_DATA = [
+    ("This product is absolutely amazing exceeded all my expectations completely", "positive"),
+    ("Love everything about this works perfectly and arrived fast", "positive"),
+    ("Outstanding quality best purchase I have made this year", "positive"),
+    ("Fantastic item exactly as described and very well made", "positive"),
+    ("Excellent product highly recommend to everyone looking for quality", "positive"),
+    ("Perfect in every way could not be happier with this purchase", "positive"),
+    ("Great value for money works better than expected", "positive"),
+    ("Wonderful experience from ordering to delivery will buy again", "positive"),
+    ("Superb quality feels premium and very durable", "positive"),
+    ("Brilliant product does everything advertised and more", "positive"),
+    ("Very impressed with the quality and fast shipping", "positive"),
+    ("Incredible product works flawlessly every single time", "positive"),
+    ("Highly satisfied this is exactly what I was looking for", "positive"),
+    ("Amazing value quality far exceeds the price paid", "positive"),
+    ("Delighted with this purchase works like a charm", "positive"),
+    ("Five stars absolutely no complaints whatsoever", "positive"),
+    ("Superb item solid build and excellent performance", "positive"),
+    ("Thrilled with this product it has transformed my routine", "positive"),
+    ("Great product easy to use and very reliable", "positive"),
+    ("Love it best thing I bought all year without doubt", "positive"),
+    ("Top quality item arrived quickly and packaged well", "positive"),
+    ("Genuinely impressed far better than cheaper alternatives", "positive"),
+    ("Works great exactly what I needed and very affordable", "positive"),
+    ("Beautiful product looks and feels premium", "positive"),
+    ("Extremely satisfied this product delivers on every promise", "positive"),
+    ("So happy with this purchase highly recommend it", "positive"),
+    ("Wonderful product easy setup and works perfectly", "positive"),
+    ("Best quality I have seen at this price very pleased", "positive"),
+    ("Exceptional product customer service was also helpful", "positive"),
+    ("Really good product smooth performance and solid build", "positive"),
+    ("Loved this from day one highly recommend to all", "positive"),
+    ("Perfect purchase looks great and functions flawlessly", "positive"),
+    ("Very happy with the results this product really works", "positive"),
+    ("Great item well packaged and fast delivery", "positive"),
+    ("Outstanding purchase I am thoroughly impressed", "positive"),
+    ("This is brilliant works exactly as described", "positive"),
+    ("Excellent value very impressed with the quality", "positive"),
+    ("Loved it great product and amazing customer support", "positive"),
+    ("Fantastic quality and fast shipping will order again", "positive"),
+    ("Very reliable product have been using daily with no issues", "positive"),
+    ("Absolutely love this it works better than I imagined", "positive"),
+    ("Great product overall solid and well designed", "positive"),
+    ("This is amazing totally worth every penny spent", "positive"),
+    ("Very satisfied product quality is top notch", "positive"),
+    ("Happy with purchase good quality and fast delivery", "positive"),
+    ("This product rocks easy to use and very effective", "positive"),
+    ("Excellent no issues at all and works as promised", "positive"),
+    ("Highly recommend this exceeded my expectations entirely", "positive"),
+    ("Great stuff strong quality and good value", "positive"),
+    ("Brilliant purchase extremely happy with the result", "positive"),
+    ("It is okay I guess nothing special but does its job", "neutral"),
+    ("Average product works fine but nothing to write home about", "neutral"),
+    ("Decent enough for the price not amazing but acceptable", "neutral"),
+    ("It works as expected nothing more nothing less really", "neutral"),
+    ("Okay product overall some good and some bad points", "neutral"),
+    ("Fair quality for the price not the best but usable", "neutral"),
+    ("Mixed feelings about this some things work well others not", "neutral"),
+    ("Acceptable product does what it says on the box", "neutral"),
+    ("Mediocre performance but reasonable value for money", "neutral"),
+    ("Not bad not great just an average everyday product", "neutral"),
+    ("It is alright meets basic requirements without issues", "neutral"),
+    ("Passable quality got what I paid for nothing more", "neutral"),
+    ("So so product serves the purpose but lacks refinement", "neutral"),
+    ("Ordinary item does the job adequately enough", "neutral"),
+    ("Moderate quality not disappointed but not impressed either", "neutral"),
+    ("Just okay expected a bit more for the price", "neutral"),
+    ("Normal product standard quality and standard performance", "neutral"),
+    ("Reasonable purchase not exceptional but solid enough", "neutral"),
+    ("Works fine most of the time occasional minor issues", "neutral"),
+    ("Neither impressed nor disappointed with this product", "neutral"),
+    ("Standard item nothing exciting but reliable enough", "neutral"),
+    ("It does the job nothing particularly exciting about it", "neutral"),
+    ("Fairly average experience delivery was fine", "neutral"),
+    ("Ok product not the worst but could definitely be better", "neutral"),
+    ("Indifferent about this it works but nothing to praise", "neutral"),
+    ("Middling quality some aspects good some need improvement", "neutral"),
+    ("Satisfactory product meets expectations without exceeding", "neutral"),
+    ("Just fine does what I needed without any fuss", "neutral"),
+    ("Took a while to arrive but product itself is adequate", "neutral"),
+    ("Basically what I expected no major surprises either way", "neutral"),
+    ("It is what it is a functional average everyday item", "neutral"),
+    ("Nothing wrong with it but nothing exciting either", "neutral"),
+    ("Runs okay not fast not slow just standard performance", "neutral"),
+    ("Not amazing but not terrible either just average", "neutral"),
+    ("Works as intended average build quality throughout", "neutral"),
+    ("Could be better could be worse average all around", "neutral"),
+    ("Regular product does what you expect nothing more", "neutral"),
+    ("It is fine for the price no complaints or compliments", "neutral"),
+    ("Average at best functional but lacks premium feel", "neutral"),
+    ("Meets basic needs not overly impressed or disappointed", "neutral"),
+    ("Decent option if you are on a tight budget", "neutral"),
+    ("Not the best I have used but certainly not the worst", "neutral"),
+    ("Okay for occasional use nothing to rave about", "neutral"),
+    ("Good enough for my needs average quality overall", "neutral"),
+    ("Adequate product arrived on time and works fine", "neutral"),
+    ("Can not complain much does the basic job properly", "neutral"),
+    ("Neither great nor bad a standard middle ground product", "neutral"),
+    ("Average rating because it is an average product plain", "neutral"),
+    ("Not sure how I feel about this it is just okay", "neutral"),
+    ("Perfectly fine product just not particularly exciting", "neutral"),
+    ("Terrible product broke after just two days of normal use", "negative"),
+    ("Worst purchase ever complete waste of money do not buy", "negative"),
+    ("Absolutely horrible nothing works as advertised at all", "negative"),
+    ("Very disappointed this is garbage and fell apart quickly", "negative"),
+    ("Awful quality feels cheap and flimsy in your hands", "negative"),
+    ("Do not buy this scam product completely useless junk", "negative"),
+    ("Disgusting quality arrived damaged and smells terrible", "negative"),
+    ("Terrible experience customer service refused to help me", "negative"),
+    ("Broke immediately absolute rubbish product avoid", "negative"),
+    ("Horrible piece of junk returned it within a week", "negative"),
+    ("Very poor quality completely different from the pictures", "negative"),
+    ("Dreadful product disappointed beyond words right now", "negative"),
+    ("Useless item does not work at all despite following instructions", "negative"),
+    ("Pathetic quality cheapest materials possible used here", "negative"),
+    ("Disgusting experience product arrived broken in pieces", "negative"),
+    ("Worst ever total scam do not trust the positive reviews", "negative"),
+    ("Extremely bad overpriced for such terrible quality", "negative"),
+    ("Never buying this brand again complete disappointment", "negative"),
+    ("Regret this purchase misleading description and poor build", "negative"),
+    ("Terrible quality stopped working after first use", "negative"),
+    ("Awful product waste of time and money ordering this", "negative"),
+    ("Really bad experience damaged on arrival and no refund", "negative"),
+    ("Poor design falls apart and does not function properly", "negative"),
+    ("Junk product avoid at all costs seriously", "negative"),
+    ("Defective item arrived with missing parts and scratches", "negative"),
+    ("Worst quality I have ever seen embarrassingly bad", "negative"),
+    ("Annoying product constant problems and very frustrating", "negative"),
+    ("Broken on arrival seller refused return request", "negative"),
+    ("Fraud completely different from listing very angry", "negative"),
+    ("Terrible does not last more than a few days at all", "negative"),
+    ("Cheap rubbish instantly regretted this purchase", "negative"),
+    ("Absolute disaster nothing works and support is useless", "negative"),
+    ("Very disappointing expected far better quality", "negative"),
+    ("Slow broken and overpriced avoid this product", "negative"),
+    ("Defective out of the box complete waste of money", "negative"),
+    ("Horrible purchase arrived late and was completely broken", "negative"),
+    ("Bad quality peeling after just one week of light use", "negative"),
+    ("Garbage product poorly made and arrived damaged", "negative"),
+    ("Poor purchase nothing like the description given online", "negative"),
+    ("Terrible product would not recommend to anyone at all", "negative"),
+    ("Cheap and nasty broke on the very first day", "negative"),
+    ("Worst thing I ever bought total scam product", "negative"),
+    ("Very bad product constant issues from day one", "negative"),
+    ("Disappointed this product is a complete lie", "negative"),
+    ("Avoid this poor quality and very bad customer service", "negative"),
+    ("Failed completely within hours demand full refund", "negative"),
+    ("Absolutely terrible do not waste your money here", "negative"),
+    ("Shocking quality embarrassed I fell for this product", "negative"),
+    ("Dreadful broken immediately useless customer service", "negative"),
+    ("Total rubbish nothing works and packaging was awful", "negative"),
+]
+
+
+def bootstrap_models():
+    """Train all 8 models on built-in seed data at startup — no CSV needed."""
+    global models, vectorizers
+    print("Bootstrapping all 8 models on seed data...")
+    texts = [preprocess(t) for t, _ in SEED_DATA]
+    labels_list = [s for _, s in SEED_DATA]
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        texts, labels_list, test_size=0.25, random_state=42, stratify=labels_list
+    )
+
+    tfidf = TfidfVectorizer(max_features=5000, ngram_range=(1, 2))
+    bow   = CountVectorizer(max_features=5000, ngram_range=(1, 2))
+    Xtr_tfidf = tfidf.fit_transform(X_train);  Xte_tfidf = tfidf.transform(X_test)
+    Xtr_bow   = bow.fit_transform(X_train);    Xte_bow   = bow.transform(X_test)
+    vectorizers['tfidf'] = tfidf
+    vectorizers['bow']   = bow
+
+    configs = {
+        'logistic_regression': LogisticRegression(max_iter=500, multi_class='multinomial', C=1.0),
+        'naive_bayes':         MultinomialNB(alpha=0.5),
+        'random_forest':       RandomForestClassifier(n_estimators=100, max_depth=15, random_state=42),
+        'feedforward_nn':      MLPClassifier(hidden_layer_sizes=(64,), activation='relu',
+                                             max_iter=300, random_state=42, early_stopping=True),
+    }
+
+    for vname, (Xtr, Xte) in [('tfidf', (Xtr_tfidf, Xte_tfidf)), ('bow', (Xtr_bow, Xte_bow))]:
+        for mname, mdl in configs.items():
+            key = f"{mname}_{vname}"
+            m = type(mdl)(**mdl.get_params())
+            m.fit(Xtr, y_train)
+            models[key] = m
+            acc = accuracy_score(y_test, m.predict(Xte))
+            print(f"  ✓ {key}: {acc:.3f}")
+
+    print(f"Bootstrap complete — {len(models)} models ready.")
+
 # Outscraper API key (free: 100 req/month at outscraper.com)
 # Set as environment variable in Railway: OUTSCRAPER_API_KEY=your_key
 OUTSCRAPER_KEY = os.environ.get('OUTSCRAPER_API_KEY', '')
@@ -376,6 +571,12 @@ def scrape_amazon_basic(url, pages=2):
 
 
 # ═══════════════════════════════════
+# BOOTSTRAP — runs at import time (works with gunicorn on Railway)
+# ═══════════════════════════════════
+bootstrap_models()
+load_transformer()
+
+# ═══════════════════════════════════
 # API ROUTES
 # ═══════════════════════════════════
 @app.route('/api/health')
@@ -622,6 +823,7 @@ def serve(path):
 
 
 if __name__ == '__main__':
+    bootstrap_models()
     load_transformer()
     port = int(os.environ.get('PORT', 5000))
     print(f"Starting on port {port}")
