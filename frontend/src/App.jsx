@@ -1,42 +1,9 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend } from "recharts";
 
-// In production (Railway): same origin serves both frontend + backend
-// In development: React runs on :3000, Flask runs on :5000
-const API = process.env.NODE_ENV === "development"
-  ? "http://localhost:5000"
-  : window.location.origin;
+// DEV: hardcoded to Flask port. Change to window.location.origin for production.
+const API = "http://localhost:5000";
 const LABELS = ["positive","neutral","negative"];
-
-// ── Maps backend model keys → frontend MODELS_REF ids ──
-const KEY_MAP = {
-  "logistic_regression_tfidf": "lr_tfidf",
-  "logistic_regression_bow":   "lr_bow",
-  "naive_bayes_tfidf":         "nb_tfidf",
-  "naive_bayes_bow":           "nb_bow",
-  "random_forest_tfidf":       "rf_tfidf",
-  "random_forest_bow":         "rf_bow",
-  "feedforward_nn_tfidf":      "ffnn_tfidf",
-  "feedforward_nn_bow":        "ffnn_bow",
-  "roberta_transformer":       "roberta",
-};
-
-function remapPreds(raw) {
-  return Object.fromEntries(
-    Object.entries(raw).map(([k, v]) => [
-      KEY_MAP[k] || k,
-      { ...v, confidence: v.confidence || 0.5, sentiment: v.sentiment || "neutral" }
-    ])
-  );
-}
-
-function ratingToSentiment(rating) {
-  const r = parseInt(rating);
-  if (isNaN(r)) return null;
-  if (r <= 2) return "negative";
-  if (r === 3) return "neutral";
-  return "positive";
-}
 
 const MODELS_REF = [
   { id:"roberta",    name:"RoBERTa Transformer",       short:"RoBERTa",vec:"Contextual",acc:0.9410,p:0.94,r:0.93,f1:0.935,transformer:true },
@@ -135,14 +102,13 @@ export default function App(){
       const resp=await fetch(`${API}/api/predict`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:input})});
       if(resp.ok){
         const data=await resp.json();
-        // FIX 1: remap backend keys to frontend model IDs
-        const allPreds=remapPreds(data.models||{});
-        addReview({id:Date.now(),text:input,sentiment:data.ensemble?.sentiment||"neutral",confidence:data.ensemble?.confidence||0.5,probs:allPreds[selModel]?.all_scores||{},allPreds,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual",groundTruth:null});
+        const allPreds=data.models||{};
+        addReview({id:Date.now(),text:input,sentiment:data.ensemble?.sentiment||"neutral",confidence:data.ensemble?.confidence||0.5,probs:allPreds[selModel]?.all_scores||{},allPreds,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual"});
       }else{throw new Error("API error");}
     }catch(e){
       // Fallback to local
       const r=localClassify(input);
-      addReview({id:Date.now(),text:input,...r,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual (local)",groundTruth:null});
+      addReview({id:Date.now(),text:input,...r,type:"manual",ts:new Date().toLocaleTimeString(),primaryModel:selModel,source:"manual (local)"});
     }
     setInput("");setLoading(false);
   },[input,selModel]);
@@ -157,10 +123,8 @@ export default function App(){
       if(data.error){setScrapeMsg(`Error: ${data.error}`);setScraping(false);return;}
       if(data.warning){setScrapeMsg(data.warning);}
       const revs=(data.reviews||[]).map((r,i)=>{
-        // FIX 2: remap backend keys + derive groundTruth from rating
-        const allPreds=remapPreds(r.predictions||{});
-        const groundTruth=ratingToSentiment(r.rating);
-        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,author:r.author,probs:{},allPreds,type:"scraped",source:r.source||scrapeSrc,ts:new Date().toLocaleTimeString(),primaryModel:"roberta",groundTruth};
+        const allPreds=r.predictions||{};
+        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,author:r.author,probs:{},allPreds,type:"scraped",source:r.source||scrapeSrc,ts:new Date().toLocaleTimeString(),primaryModel:"roberta"};
       });
       if(revs.length===0){
         setScrapeMsg(`No reviews found. ${data.warning||"Try a different query or source."}`);
@@ -186,10 +150,8 @@ export default function App(){
       const data=await resp.json();
       if(data.error){setUploadMsg(`Error: ${data.error}`);setUploading(false);return;}
       const revs=(data.reviews||[]).map((r,i)=>{
-        // FIX 3: remap backend keys + derive groundTruth from rating
-        const allPreds=remapPreds(r.predictions||{});
-        const groundTruth=ratingToSentiment(r.rating);
-        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,probs:{},allPreds,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta",groundTruth};
+        const allPreds=r.predictions||{};
+        return{id:Date.now()+i,text:r.text,sentiment:r.sentiment||"neutral",confidence:r.confidence||0.5,rating:r.rating,probs:{},allPreds,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta"};
       });
       addReviews(revs);
       setUploadMsg(`Analyzed ${revs.length} reviews from ${file.name} (${data.total_rows} total rows). Columns: ${data.columns_found?.join(", ")}`);
@@ -209,9 +171,7 @@ export default function App(){
           const text=cols[textIdx]?.replace(/"/g,"").trim();
           if(!text||text.length<10)continue;
           const r=localClassify(text);
-          const rawRating=ratingIdx>=0?parseInt(cols[ratingIdx])||3:3;
-          const groundTruth=ratingToSentiment(rawRating);
-          revs.push({id:Date.now()+i,text:text.slice(0,500),...r,rating:rawRating,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta",groundTruth});
+          revs.push({id:Date.now()+i,text:text.slice(0,500),...r,rating:ratingIdx>=0?parseInt(cols[ratingIdx])||3:3,type:"uploaded",source:`csv:${file.name}`,ts:new Date().toLocaleTimeString(),primaryModel:"roberta"});
         }
         addReviews(revs);
         setUploadMsg(`Analyzed ${revs.length} reviews locally from ${file.name}`);
@@ -240,11 +200,9 @@ export default function App(){
       totalConf+=rev.confidence||0;
       const c=rev.confidence||0.5;
       if(c<0.6)confBuckets["0.5-0.6"]++;else if(c<0.7)confBuckets["0.6-0.7"]++;else if(c<0.8)confBuckets["0.7-0.8"]++;else if(c<0.9)confBuckets["0.8-0.9"]++;else confBuckets["0.9-1.0"]++;
-
-      // FIX 4: use groundTruth (from rating) as the true label, NOT rev.sentiment
-      // This stops models being compared against their own ensemble output
-      const trueSent=rev.groundTruth||null;
-      if(trueSent&&rev.allPreds){
+      // Build confusion matrices per model
+      const trueSent=rev.sentiment;
+      if(rev.allPreds){
         for(const[mid,pred]of Object.entries(rev.allPreds)){
           if(modelCM[mid]&&pred?.sentiment){
             modelCM[mid][trueSent]=modelCM[mid][trueSent]||{};
@@ -267,7 +225,7 @@ export default function App(){
         classMet[cls]={precision:prec,recall:rec,f1};
         correct+=tp;total+=tp+fn;
       }
-      modelStats[m.id]={cm,liveAcc:total>0?correct/total:null,classMet,correct,total};
+      modelStats[m.id]={cm,liveAcc:total>0?correct/total:0,classMet,correct,total};
     }
     return{n,dist,confBuckets,avgConf:totalConf/n,modelStats,modelCM};
   },[allReviews]);
@@ -409,8 +367,7 @@ export default function App(){
 
             {/* Accuracy table */}
             <Card>
-              <h3 style={{margin:"0 0 4px",color:P.white,fontSize:14}}>Live Model Performance — {metrics.n} Reviews</h3>
-              <p style={{margin:"0 0 12px",color:P.sub,fontSize:10}}>Live Acc uses rating as ground truth. Upload a CSV with a Score/rating column for meaningful values.</p>
+              <h3 style={{margin:"0 0 12px",color:P.white,fontSize:14}}>Live Model Performance — {metrics.n} Reviews</h3>
               <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
                 <thead><tr style={{borderBottom:`2px solid ${P.border}`}}>{["Model","Vec","Ref Acc","Live Acc","P","R","F1",""].map(h=><th key={h} style={{textAlign:h==="Model"?"left":"center",padding:"7px 8px",color:P.muted,fontWeight:600,fontSize:9.5}}>{h}</th>)}</tr></thead>
                 <tbody>{MODELS_REF.map((m,i)=>{
@@ -418,17 +375,15 @@ export default function App(){
                   const wP=LABELS.reduce((a,c)=>a+(s.classMet[c]?.precision||0),0)/3;
                   const wR=LABELS.reduce((a,c)=>a+(s.classMet[c]?.recall||0),0)/3;
                   const wF=LABELS.reduce((a,c)=>a+(s.classMet[c]?.f1||0),0)/3;
-                  const liveAccDisplay=s.liveAcc===null?"N/A":`${(s.liveAcc*100).toFixed(1)}%`;
-                  const liveAccColor=s.liveAcc===null?P.muted:s.liveAcc>=0.8?P.green:s.liveAcc>=0.6?P.amber:P.red;
                   return<tr key={i} style={{borderBottom:`1px solid ${P.border}`,background:m.transformer?`${P.indigo}06`:m.paperBest?`${P.green}04`:"transparent"}}>
                     <td style={{padding:"8px",color:P.white,fontWeight:m.transformer||m.paperBest?700:400}}>{m.name}{m.transformer&&<span style={{fontSize:7,color:P.iSoft,background:`${P.indigo}18`,padding:"1px 5px",borderRadius:6,marginLeft:4}}>NEW</span>}{m.paperBest&&<span style={{fontSize:7,color:P.green,background:`${P.green}14`,padding:"1px 5px",borderRadius:6,marginLeft:4}}>BEST</span>}</td>
                     <td style={{textAlign:"center",padding:"8px",color:P.sub,fontSize:10}}>{m.vec}</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.muted}}>{(m.acc*100).toFixed(2)}%</td>
-                    <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",fontWeight:700,color:liveAccColor}}>{liveAccDisplay}</td>
+                    <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",fontWeight:700,color:s.liveAcc>=0.8?P.green:s.liveAcc>=0.6?P.amber:P.red}}>{(s.liveAcc*100).toFixed(1)}%</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wP*100).toFixed(1)}%</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wR*100).toFixed(1)}%</td>
                     <td style={{textAlign:"center",padding:"8px",fontFamily:"monospace",color:P.text}}>{(wF*100).toFixed(1)}%</td>
-                    <td style={{padding:"8px",width:90}}>{s.liveAcc!==null?<CBar v={s.liveAcc} h={4}/>:<span style={{fontSize:9,color:P.muted}}>need rating</span>}</td>
+                    <td style={{padding:"8px",width:90}}><CBar v={s.liveAcc} h={4}/></td>
                   </tr>})}</tbody>
               </table></div>
             </Card>
@@ -437,7 +392,7 @@ export default function App(){
             <Card>
               <h3 style={{margin:"0 0 12px",color:P.white,fontSize:14}}>Live Accuracy — All Models</h3>
               <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={MODELS_REF.map(m=>({name:`${m.short}${m.transformer?"":"/"+m.vec}`,acc:metrics.modelStats[m.id]?.liveAcc!==null?+((metrics.modelStats[m.id]?.liveAcc||0)*100).toFixed(1):null,ref:+(m.acc*100).toFixed(1)}))} margin={{top:10,right:20,left:0,bottom:30}}>
+                <BarChart data={MODELS_REF.map(m=>({name:`${m.short}${m.transformer?"":"/"+m.vec}`,acc:+((metrics.modelStats[m.id]?.liveAcc||0)*100).toFixed(1),ref:+(m.acc*100).toFixed(1)}))} margin={{top:10,right:20,left:0,bottom:30}}>
                   <CartesianGrid strokeDasharray="3 3" stroke={P.border}/><XAxis dataKey="name" tick={{fill:P.sub,fontSize:9}} angle={-25} textAnchor="end" interval={0}/><YAxis domain={[0,100]} tick={{fill:P.sub,fontSize:10}}/><Tooltip contentStyle={{background:P.card,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:11}}/><Legend wrapperStyle={{fontSize:10}}/>
                   <Bar dataKey="ref" name="Reference" fill={P.muted} radius={[3,3,0,0]} fillOpacity={0.4}/><Bar dataKey="acc" name="Live" fill={P.indigo} radius={[3,3,0,0]}/>
                 </BarChart>
@@ -447,13 +402,10 @@ export default function App(){
             {/* Confusion matrix */}
             <Card>
               <h3 style={{margin:"0 0 4px",color:P.white,fontSize:14}}>Live Confusion Matrix</h3>
-              <p style={{margin:"0 0 10px",color:P.sub,fontSize:10}}>Rows = True label (from rating), Columns = Predicted. Requires reviews with a rating/score.</p>
               <div style={{display:"flex",gap:4,marginBottom:12,flexWrap:"wrap"}}>
-                {MODELS_REF.map(m=><button key={m.id} onClick={()=>setSelModel(m.id)} style={{padding:"4px 9px",borderRadius:6,border:`1px solid ${selModel===m.id?P.indigo:P.border}`,background:selModel===m.id?`${P.indigo}18`:"transparent",color:selModel===m.id?P.iSoft:P.sub,fontSize:9.5,fontWeight:600,cursor:"pointer"}}>{m.short}{m.transformer?"":"/"+m.vec}</button>)}
+                {MODELS_REF.map(m=><button key={m.id} onClick={()=>setSelModel(m.id)} style={{padding:"4px 9px",borderRadius:6,border:`1px solid ${selModel===m.id?P.indigo:P.border}`,background:selModel===m.id?`${P.indigo}18`:"transparent",color:selModel===m.id?P.iSoft:P.sub,fontSize:9.5,fontWeight:600,cursor:"pointer"}}>{m.short}{m.transformer?"":`/${m.vec}`}</button>)}
               </div>
-              {(()=>{const s=metrics.modelStats[selModel];if(!s)return null;
-                if(s.total===0)return<div style={{color:P.sub,fontSize:11,textAlign:"center",padding:"20px"}}>No ground truth data yet — upload a CSV with a Score/rating column to populate this matrix.</div>;
-                const mx=Math.max(...LABELS.flatMap(t=>LABELS.map(p=>s.cm[t]?.[p]||0)),1);
+              {(()=>{const s=metrics.modelStats[selModel];if(!s)return null;const mx=Math.max(...LABELS.flatMap(t=>LABELS.map(p=>s.cm[t]?.[p]||0)),1);
                 return<div style={{display:"flex",justifyContent:"center"}}><div>
                   <div style={{display:"flex",marginLeft:70}}><div style={{width:"100%",textAlign:"center",fontSize:10,fontWeight:700,color:P.white,marginBottom:4}}>Predicted</div></div>
                   <div style={{display:"flex",marginLeft:70,marginBottom:4}}>{LABELS.map(l=><div key={l} style={{width:80,textAlign:"center",fontSize:9,color:P.sub,fontWeight:600,textTransform:"capitalize"}}>{l}</div>)}</div>
@@ -485,7 +437,7 @@ export default function App(){
             <Card>
               <h3 style={{margin:"0 0 12px",color:P.white,fontSize:14}}>Radar — Model Comparison</h3>
               <ResponsiveContainer width="100%" height={280}>
-                <RadarChart data={["Accuracy","Precision","Recall","F1"].map(met=>{const row={metric:met};for(const m of MODELS_REF.filter((_,i)=>[0,1,3,5,7].includes(i))){const s=metrics.modelStats[m.id];if(!s)continue;const wP=LABELS.reduce((a,c)=>a+(s.classMet[c]?.precision||0),0)/3;const wR=LABELS.reduce((a,c)=>a+(s.classMet[c]?.recall||0),0)/3;const wF=LABELS.reduce((a,c)=>a+(s.classMet[c]?.f1||0),0)/3;const accVal=s.liveAcc!==null?s.liveAcc:m.acc;row[m.short+(m.transformer?"":"/"+m.vec)]=+((met==="Accuracy"?accVal:met==="Precision"?wP:met==="Recall"?wR:wF)*100).toFixed(1);}return row;})}>
+                <RadarChart data={["Accuracy","Precision","Recall","F1"].map(met=>{const row={metric:met};for(const m of MODELS_REF.filter((_,i)=>[0,1,3,5,7].includes(i))){const s=metrics.modelStats[m.id];if(!s)continue;const wP=LABELS.reduce((a,c)=>a+(s.classMet[c]?.precision||0),0)/3;const wR=LABELS.reduce((a,c)=>a+(s.classMet[c]?.recall||0),0)/3;const wF=LABELS.reduce((a,c)=>a+(s.classMet[c]?.f1||0),0)/3;row[m.short+(m.transformer?"":"/"+m.vec)]=+((met==="Accuracy"?s.liveAcc:met==="Precision"?wP:met==="Recall"?wR:wF)*100).toFixed(1);}return row;})}>
                   <PolarGrid stroke={P.border}/><PolarAngleAxis dataKey="metric" tick={{fill:P.sub,fontSize:11}}/><PolarRadiusAxis angle={30} domain={[0,100]} tick={{fill:P.faint,fontSize:9}}/>
                   <Radar name="RoBERTa" dataKey="RoBERTa" stroke={P.indigo} fill={P.indigo} fillOpacity={0.15} strokeWidth={2}/><Radar name="FFNN/BoW" dataKey="FFNN/BoW" stroke={P.green} fill={P.green} fillOpacity={0.1}/><Radar name="LR/TF-IDF" dataKey="LR/TF-IDF" stroke={P.amber} fill={P.amber} fillOpacity={0.08}/><Radar name="NB/TF-IDF" dataKey="NB/TF-IDF" stroke={P.red} fill={P.red} fillOpacity={0.08}/><Radar name="RF/TF-IDF" dataKey="RF/TF-IDF" stroke="#c084fc" fill="#c084fc" fillOpacity={0.08}/>
                   <Legend wrapperStyle={{fontSize:10}}/>
@@ -519,7 +471,6 @@ function RevCard({r}){
         <p style={{margin:"0 0 7px",color:P.text,fontSize:12.5,lineHeight:1.55}}>"{r.text?.slice(0,300)}{r.text?.length>300?"...":""}"</p>
         <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
           <Badge s={r.sentiment}/>
-          {r.groundTruth&&r.groundTruth!==r.sentiment&&<span style={{fontSize:8,color:P.amber,background:`${P.amber}12`,padding:"2px 6px",borderRadius:6,fontWeight:700}}>TRUE: {r.groundTruth.toUpperCase()}</span>}
           {r.rating&&<span style={{fontSize:10,color:"#fbbf24"}}>{"★".repeat(Math.min(5,r.rating))}{"☆".repeat(Math.max(0,5-r.rating))}</span>}
           {r.type==="scraped"&&<span style={{fontSize:8,color:P.green,background:`${P.green}12`,padding:"2px 6px",borderRadius:6,fontWeight:700}}>SCRAPED</span>}
           {r.type==="uploaded"&&<span style={{fontSize:8,color:P.amber,background:`${P.amber}12`,padding:"2px 6px",borderRadius:6,fontWeight:700}}>CSV</span>}
@@ -532,7 +483,7 @@ function RevCard({r}){
       <button onClick={()=>setOpen(!open)} style={{marginTop:8,background:"none",border:"none",color:P.iSoft,fontSize:10,fontWeight:600,cursor:"pointer",padding:0}}>{open?"Hide":"Show"} all models</button>
       {open&&<div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(170px,1fr))",gap:4,marginTop:8}}>
         {Object.entries(r.allPreds).map(([mid,pred])=>{
-          const m=MODELS_REF.find(x=>x.id===mid);const name=m?`${m.short}${m.transformer?"":"/"+m.vec}`:mid;
+          const m=MODELS_REF.find(x=>x.id===mid);const name=m?`${m.short}${m.transformer?"":`/${m.vec}`}`:mid;
           return<div key={mid} style={{padding:"6px 8px",borderRadius:6,background:P.raised,border:`1px solid ${P.border}`,fontSize:9.5}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:2}}><span style={{color:P.text,fontWeight:600}}>{name}</span><span style={{color:sC(pred.sentiment),fontWeight:700,fontSize:9,textTransform:"uppercase"}}>{pred.sentiment}</span></div>
             <CBar v={pred.confidence||0.5} h={3}/>
