@@ -1,7 +1,11 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Legend } from "recharts";
 
-const API = window.location.origin;
+// In production (Railway): same origin serves both frontend + backend
+// In development: React runs on :3000, Flask runs on :5000
+const API = process.env.NODE_ENV === "development"
+  ? "http://localhost:5000"
+  : window.location.origin;
 const LABELS = ["positive","neutral","negative"];
 
 // ── Maps backend model keys → frontend MODELS_REF ids ──
