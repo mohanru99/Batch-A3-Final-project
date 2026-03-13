@@ -18,7 +18,7 @@ const MODELS_REF = [
 
 const TEAM = {
   members:[
-    {name:"Ruttala Mohan",reg:"RA221102620002"},
+    {name:"Ruttala Mohan",reg:"RA2211026020002"},
     {name:"Ganthi Nethaji",reg:"RA2211026020058"},
     {name:"Bommisetty Rohith",reg:"RA2211026020041"},
   ],
