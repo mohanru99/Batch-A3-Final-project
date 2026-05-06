@@ -35,7 +35,10 @@ from sklearn.naive_bayes import MultinomialNB
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import (
+    accuracy_score, f1_score, precision_recall_fscore_support,
+    confusion_matrix, classification_report,
+)
 from sklearn.utils import resample
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -301,7 +304,10 @@ def main():
     }
 
     metrics = {}
+    confusion = {}
+    per_class = {}
     log.info("Training models...")
+    classes_sorted = sorted(bal["sentiment"].unique())
     for vn, (Xt, Xe) in [("tfidf", (Xtr_tf, Xte_tf)), ("bow", (Xtr_bw, Xte_bw))]:
         for mn, base in cfgs.items():
             key = f"{mn}_{vn}"
@@ -311,9 +317,28 @@ def main():
             acc = accuracy_score(yte, pred)
             f1 = f1_score(yte, pred, average="macro")
             metrics[key] = {"accuracy": round(float(acc), 4), "f1_macro": round(float(f1), 4)}
+
+            # Confusion matrix (rows = true, cols = predicted), in fixed class order
+            cm = confusion_matrix(yte, pred, labels=classes_sorted)
+            confusion[key] = cm.tolist()
+
+            # Per-class precision/recall/F1
+            p, r, f, s = precision_recall_fscore_support(
+                yte, pred, labels=classes_sorted, zero_division=0,
+            )
+            per_class[key] = {
+                cls: {
+                    "precision": round(float(p[i]), 4),
+                    "recall":    round(float(r[i]), 4),
+                    "f1":        round(float(f[i]), 4),
+                    "support":   int(s[i]),
+                }
+                for i, cls in enumerate(classes_sorted)
+            }
+
             log.info("  %-30s  acc=%.4f  f1=%.4f", key, acc, f1)
-            with open(MODEL_DIR / f"{key}.pkl", "wb") as f:
-                pickle.dump(m, f)
+            with open(MODEL_DIR / f"{key}.pkl", "wb") as f_out:
+                pickle.dump(m, f_out)
 
     # Save vectorizers
     with open(MODEL_DIR / "tfidf.pkl", "wb") as f:
@@ -321,13 +346,20 @@ def main():
     with open(MODEL_DIR / "bow.pkl", "wb") as f:
         pickle.dump(bow, f)
 
+    # Save a small held-out test set so app.py can show live evaluation in the UI
+    test_sample = pd.DataFrame({"text": Xte.tolist(), "label": yte.tolist()}).head(500)
+    test_sample.to_json(MODEL_DIR / "test_set.json", orient="records")
+    log.info("Saved %d held-out test samples to test_set.json", len(test_sample))
+
     # Save metrics
     with open(MODEL_DIR / "metrics.json", "w") as f:
         json.dump({
             "metrics": metrics,
+            "confusion": confusion,
+            "per_class": per_class,
+            "classes": classes_sorted,
             "trained_on": int(len(bal)),
             "test_size": int(len(yte)),
-            "classes": list(sorted(bal["sentiment"].unique())),
             "vectorizer_features": {"tfidf": int(Xtr_tf.shape[1]), "bow": int(Xtr_bw.shape[1])},
         }, f, indent=2)
 

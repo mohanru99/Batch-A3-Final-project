@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from "react"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis,
+  LineChart, Line,
 } from "recharts";
 
 const API = process.env.NODE_ENV === "production" ? "" : "http://localhost:5000";
@@ -21,12 +22,14 @@ const COLORS = {
 };
 
 const TABS = [
-  { id: "home",    label: "Home" },
-  { id: "predict", label: "Analyze Text" },
-  { id: "live",    label: "Scrape Live Reviews" },
-  { id: "upload",  label: "Upload CSV" },
-  { id: "history", label: "History" },
-  { id: "models",  label: "Models & Metrics" },
+  { id: "home",     label: "Home" },
+  { id: "predict",  label: "Analyze Text" },
+  { id: "live",     label: "Scrape Live Reviews" },
+  { id: "compare",  label: "Compare" },
+  { id: "upload",   label: "Upload CSV" },
+  { id: "evaluate", label: "Evaluation" },
+  { id: "history",  label: "History" },
+  { id: "models",   label: "Models" },
 ];
 
 export default function App() {
@@ -57,12 +60,14 @@ export default function App() {
         ))}
       </nav>
       <main style={S.main}>
-        {tab === "home"    && <Home health={health} stats={stats} go={setTab} />}
-        {tab === "live"    && <LiveScrape />}
-        {tab === "predict" && <Predict />}
-        {tab === "upload"  && <Upload />}
-        {tab === "history" && <History />}
-        {tab === "models"  && <Models health={health} />}
+        {tab === "home"     && <Home health={health} stats={stats} go={setTab} />}
+        {tab === "live"     && <LiveScrape />}
+        {tab === "predict"  && <Predict />}
+        {tab === "compare"  && <Compare />}
+        {tab === "upload"   && <Upload />}
+        {tab === "evaluate" && <Evaluate />}
+        {tab === "history"  && <History />}
+        {tab === "models"   && <Models health={health} />}
       </main>
       <footer style={S.footer}>
         <span>Real-time multi-source sentiment · RoBERTa + sklearn ensemble</span>
@@ -302,6 +307,7 @@ function LiveScrape() {
 
 function ReviewCard({ r }) {
   const sentColor = COLORS[r.sentiment] || COLORS.neutral;
+  const lowAgreement = r.agreement != null && r.agreement < 0.6;
   return (
     <div style={{ ...S.review, borderLeft: `4px solid ${sentColor}` }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
@@ -311,7 +317,15 @@ function ReviewCard({ r }) {
           {r.rating != null && <span> · ★{r.rating}</span>}
           {r.score != null && r.score !== 0 && <span> · {r.score} pts</span>}
         </div>
-        <SentimentBadge sentiment={r.sentiment} confidence={r.confidence} />
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {lowAgreement && (
+            <span title="Models disagreed on this prediction" style={{
+              background: "#facc1522", color: "#facc15", border: `1px solid #facc1555`,
+              padding: "2px 8px", borderRadius: 999, fontSize: 10, fontWeight: 600,
+            }}>⚠ split</span>
+          )}
+          <SentimentBadge sentiment={r.sentiment} confidence={r.confidence} />
+        </div>
       </div>
       <div style={{ marginTop: 6, lineHeight: 1.5, fontSize: 14 }}>
         {(r.text || "").length > 320 ? (r.text.slice(0, 320) + "…") : r.text}
@@ -320,8 +334,11 @@ function ReviewCard({ r }) {
         <div style={{ marginTop: 8, fontSize: 11, color: COLORS.muted, display: "flex", gap: 12, flexWrap: "wrap" }}>
           <span>RoBERTa: <b style={{ color: COLORS[r.roberta.sentiment] }}>{r.roberta.sentiment}</b> ({(r.roberta.confidence * 100).toFixed(0)}%)</span>
           {r.models && Object.keys(r.models).length > 0 && (
-            <span>Ensemble: {Object.entries(r.models).slice(0, 4).map(([k, v]) =>
+            <span>Models: {Object.entries(r.models).slice(0, 4).map(([k, v]) =>
               `${k.split("_")[0]}=${v.sentiment.charAt(0)}`).join(" ")}</span>
+          )}
+          {r.agreement != null && (
+            <span>Agreement: <b style={{ color: r.agreement >= 0.7 ? COLORS.positive : r.agreement >= 0.5 ? "#facc15" : COLORS.negative }}>{(r.agreement * 100).toFixed(0)}%</b></span>
           )}
           {r.url && <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ color: COLORS.accent2 }}>source ↗</a>}
         </div>
@@ -547,11 +564,18 @@ function History() {
   const [stats, setStats] = useState(null);
   const [rows, setRows] = useState([]);
   const [filter, setFilter] = useState("");
+  const [trend, setTrend] = useState([]);
+  const [keywords, setKeywords] = useState(null);
 
   const load = useCallback(() => {
     fetch(`${API}/api/stats`).then(r => r.json()).then(setStats);
-    fetch(`${API}/api/history?limit=200${filter ? `&query=${encodeURIComponent(filter)}` : ""}`)
+    const q = filter ? `&query=${encodeURIComponent(filter)}` : "";
+    fetch(`${API}/api/history?limit=200${q}`)
       .then(r => r.json()).then(d => setRows(d.rows || []));
+    fetch(`${API}/api/trend?bucket=day${q.replace("&", "&")}`)
+      .then(r => r.json()).then(d => setTrend(d.series || []));
+    fetch(`${API}/api/keywords?top_n=12${q.replace("&", "&")}`)
+      .then(r => r.json()).then(d => setKeywords(d.keywords || null));
   }, [filter]);
 
   useEffect(() => { load(); }, [load]);
@@ -561,43 +585,100 @@ function History() {
     return Object.entries(stats.by_sentiment).map(([name, value]) => ({ name, value }));
   }, [stats]);
 
+  const exportUrl = `${API}/api/export${filter ? `?query=${encodeURIComponent(filter)}` : ""}`;
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
       <Card title="Persisted stats">
         {stats && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
-            <KV k="Total reviews stored" v={stats.total_reviews} />
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+            <KV k="Total reviews" v={stats.total_reviews} />
+            <KV k="Avg confidence" v={stats.avg_confidence != null ? `${(stats.avg_confidence * 100).toFixed(1)}%` : "—"} />
             <KV k="Trained on" v={stats.trained_on} />
             <KV k="RoBERTa" v={stats.roberta_ready ? "ready" : "loading"} />
           </div>
         )}
       </Card>
 
-      {sentData.length > 0 && (
-        <Card title="Sentiment over all stored reviews">
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={sentData}>
-              <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
-              <XAxis dataKey="name" stroke={COLORS.muted} />
-              <YAxis stroke={COLORS.muted} />
-              <Tooltip contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }} />
-              <Bar dataKey="value">
-                {sentData.map(d => <Cell key={d.name} fill={COLORS[d.name] || COLORS.accent} />)}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </Card>
-      )}
-
       <Card>
-        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "end", flexWrap: "wrap" }}>
           <Field label="Filter by query">
             <input value={filter} onChange={e => setFilter(e.target.value)}
               style={S.input} placeholder="leave empty for all" />
           </Field>
           <button onClick={load} style={S.primaryBtn}>Refresh</button>
+          <a href={exportUrl} download style={{ ...S.primaryBtn, textDecoration: "none", display: "inline-block" }}>
+            ⬇ Export CSV
+          </a>
         </div>
       </Card>
+
+      {sentData.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Card title="Sentiment distribution">
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={sentData}>
+                <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
+                <XAxis dataKey="name" stroke={COLORS.muted} />
+                <YAxis stroke={COLORS.muted} />
+                <Tooltip contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }} />
+                <Bar dataKey="value">
+                  {sentData.map(d => <Cell key={d.name} fill={COLORS[d.name] || COLORS.accent} />)}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+          {trend.length > 1 ? (
+            <Card title="Sentiment trend over time">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={trend}>
+                  <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
+                  <XAxis dataKey="t" stroke={COLORS.muted} fontSize={11} />
+                  <YAxis stroke={COLORS.muted} />
+                  <Tooltip contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }} />
+                  <Legend />
+                  <Line dataKey="positive" stroke={COLORS.positive} strokeWidth={2} dot={false} />
+                  <Line dataKey="neutral"  stroke={COLORS.neutral}  strokeWidth={2} dot={false} />
+                  <Line dataKey="negative" stroke={COLORS.negative} strokeWidth={2} dot={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </Card>
+          ) : (
+            <Card title="Sentiment trend over time">
+              <div style={{ color: COLORS.muted, padding: 30, textAlign: "center" }}>
+                Need reviews from at least two different days to show a trend.
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
+
+      {keywords && (
+        <Card title="Top words per sentiment (TF-IDF)">
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+            {["positive", "neutral", "negative"].map(cls => (
+              <div key={cls}>
+                <div style={{ fontSize: 11, color: COLORS[cls], fontWeight: 700, marginBottom: 8, letterSpacing: 0.6 }}>
+                  {cls.toUpperCase()}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {(keywords[cls] || []).map(({ term, score }) => (
+                    <span key={term} style={{
+                      background: COLORS[cls] + "22", color: COLORS[cls],
+                      border: `1px solid ${COLORS[cls]}33`,
+                      padding: "4px 10px", borderRadius: 999,
+                      fontSize: 11 + Math.min(score * 30, 6),
+                    }}>{term}</span>
+                  ))}
+                  {(!keywords[cls] || keywords[cls].length === 0) && (
+                    <span style={{ color: COLORS.muted, fontSize: 12 }}>not enough samples</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       <Card title={`Recent reviews (${rows.length})`}>
         <div style={{ display: "grid", gap: 8, maxHeight: 600, overflowY: "auto" }}>
@@ -611,6 +692,272 @@ function History() {
         </div>
       </Card>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+function Compare() {
+  const [a, setA] = useState("");
+  const [b, setB] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+
+  const run = async () => {
+    if (!a.trim() || !b.trim()) return;
+    setBusy(true); setResult(null);
+    try {
+      const r = await fetch(`${API}/api/compare?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}&limit=20`);
+      setResult(await r.json());
+    } catch (e) {
+      setResult({ error: String(e) });
+    }
+    setBusy(false);
+  };
+
+  const winner = result && !result.error ? (
+    result.a.score > result.b.score ? "a" :
+    result.b.score > result.a.score ? "b" : "tie"
+  ) : null;
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <Card title="Compare sentiment between two queries">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
+          <Field label="Query A">
+            <input value={a} onChange={e => setA(e.target.value)} style={S.input}
+              placeholder="e.g. iphone" disabled={busy}
+              onKeyDown={e => e.key === "Enter" && run()} />
+          </Field>
+          <Field label="Query B">
+            <input value={b} onChange={e => setB(e.target.value)} style={S.input}
+              placeholder="e.g. samsung galaxy" disabled={busy}
+              onKeyDown={e => e.key === "Enter" && run()} />
+          </Field>
+          <button onClick={run} disabled={busy || !a.trim() || !b.trim()} style={S.primaryBtn}>
+            {busy ? "Comparing..." : "Compare"}
+          </button>
+        </div>
+      </Card>
+
+      {result?.error && <Card><div style={{ color: COLORS.negative }}>{result.error}</div></Card>}
+
+      {result && !result.error && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <CompareCard data={result.a} highlight={winner === "a"} />
+            <CompareCard data={result.b} highlight={winner === "b"} />
+          </div>
+          <Card title="Side-by-side breakdown">
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={[
+                { metric: "Positive", A: result.a.by_sentiment.positive || 0, B: result.b.by_sentiment.positive || 0 },
+                { metric: "Neutral",  A: result.a.by_sentiment.neutral  || 0, B: result.b.by_sentiment.neutral  || 0 },
+                { metric: "Negative", A: result.a.by_sentiment.negative || 0, B: result.b.by_sentiment.negative || 0 },
+              ]}>
+                <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
+                <XAxis dataKey="metric" stroke={COLORS.muted} />
+                <YAxis stroke={COLORS.muted} />
+                <Tooltip contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }} />
+                <Legend />
+                <Bar dataKey="A" name={result.a.query} fill={COLORS.accent} />
+                <Bar dataKey="B" name={result.b.query} fill={COLORS.accent2} />
+              </BarChart>
+            </ResponsiveContainer>
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CompareCard({ data, highlight }) {
+  const score = data.score;
+  const scoreColor = score > 0.1 ? COLORS.positive : score < -0.1 ? COLORS.negative : COLORS.neutral;
+  return (
+    <div style={{
+      ...S.card,
+      borderColor: highlight ? COLORS.accent2 : COLORS.border,
+      borderWidth: highlight ? 2 : 1,
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <h3 style={{ margin: 0 }}>{data.query}</h3>
+        {highlight && <span style={{ fontSize: 11, color: COLORS.accent2, fontWeight: 700 }}>★ MORE POSITIVE</span>}
+      </div>
+      <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <KV k="Reviews analyzed" v={data.count} />
+        <KV k="Avg confidence" v={`${(data.avg_confidence * 100).toFixed(1)}%`} />
+        <KV k="Net sentiment" v={<span style={{ color: scoreColor, fontWeight: 700 }}>{score >= 0 ? "+" : ""}{(score * 100).toFixed(1)}%</span>} />
+        <KV k="Sentiment mix" v={
+          <span style={{ fontSize: 13 }}>
+            <span style={{ color: COLORS.positive }}>+{data.by_sentiment.positive || 0}</span>{" / "}
+            <span style={{ color: COLORS.neutral }}>{data.by_sentiment.neutral || 0}</span>{" / "}
+            <span style={{ color: COLORS.negative }}>−{data.by_sentiment.negative || 0}</span>
+          </span>
+        } />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+function Evaluate() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    setBusy(true);
+    fetch(`${API}/api/evaluate`).then(r => r.json()).then(d => {
+      setData(d);
+      // Default to ensemble_live if available
+      const first = d.ensemble_live ? "ensemble_live" : Object.keys(d.models || {})[0];
+      setSelected(first);
+      setBusy(false);
+    }).catch(() => setBusy(false));
+  }, []);
+
+  if (busy) return <Card><div style={{ color: COLORS.muted, padding: 30, textAlign: "center" }}>Evaluating models on held-out test set…</div></Card>;
+  if (!data || data.error) return <Card><div style={{ color: COLORS.negative, padding: 20 }}>{data?.error || "No evaluation data"}</div></Card>;
+
+  const all = { ...(data.models || {}) };
+  if (data.ensemble_live) all.ensemble_live = data.ensemble_live;
+  const current = all[selected] || {};
+  const classes = data.classes || ["negative", "neutral", "positive"];
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      <Card>
+        <div style={{ marginBottom: 14, color: COLORS.muted, fontSize: 13 }}>
+          Per-model evaluation on a held-out test set of <b style={{ color: COLORS.text }}>{data.test_size}</b> samples.
+          Choose a model to inspect its confusion matrix and per-class precision/recall/F1.
+        </div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {Object.keys(all).map(key => {
+            const isLive = key === "ensemble_live";
+            return (
+              <button key={key} onClick={() => setSelected(key)} style={{
+                padding: "8px 14px", borderRadius: 8,
+                background: selected === key ? COLORS.accent : COLORS.cardLite,
+                color: COLORS.text,
+                border: `1px solid ${selected === key ? COLORS.accent : COLORS.border}`,
+                cursor: "pointer", fontSize: 12, fontWeight: 600,
+              }}>
+                {isLive ? "★ Ensemble (RoBERTa+sklearn)" : key}
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
+      {current && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
+            <KV k="Accuracy" v={current.accuracy != null ? `${(current.accuracy * 100).toFixed(2)}%` : "—"} />
+            <KV k="F1 (macro)" v={current.f1_macro != null ? current.f1_macro.toFixed(4) : "—"} />
+            {current.avg_confidence != null && (
+              <KV k="Avg confidence" v={`${(current.avg_confidence * 100).toFixed(1)}%`} />
+            )}
+            {current.n_samples != null && <KV k="Samples evaluated" v={current.n_samples} />}
+          </div>
+
+          <Card title="Confusion matrix">
+            <ConfusionMatrix matrix={current.confusion} classes={classes} />
+            <div style={{ marginTop: 12, fontSize: 11, color: COLORS.muted, textAlign: "center" }}>
+              Rows = true label · Columns = predicted label · Diagonal = correct
+            </div>
+          </Card>
+
+          <Card title="Per-class precision / recall / F1">
+            <PerClassTable perClass={current.per_class} classes={classes} />
+          </Card>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ConfusionMatrix({ matrix, classes }) {
+  if (!matrix || !matrix.length) return <div style={{ color: COLORS.muted }}>No data</div>;
+  const flat = matrix.flat();
+  const max = Math.max(...flat, 1);
+  return (
+    <div style={{ display: "flex", justifyContent: "center" }}>
+      <table style={{ borderCollapse: "collapse", margin: "0 auto" }}>
+        <thead>
+          <tr>
+            <th style={{ padding: 8 }}></th>
+            <th style={{ padding: 8, fontSize: 10, color: COLORS.muted }} colSpan={classes.length}>PREDICTED</th>
+          </tr>
+          <tr>
+            <th style={{ padding: 8, fontSize: 10, color: COLORS.muted }}>TRUE</th>
+            {classes.map(c => (
+              <th key={c} style={{
+                padding: 10, fontSize: 12, color: COLORS[c] || COLORS.text,
+                fontWeight: 700, textTransform: "capitalize",
+              }}>{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {matrix.map((row, i) => (
+            <tr key={i}>
+              <th style={{
+                padding: 10, fontSize: 12, color: COLORS[classes[i]] || COLORS.text,
+                fontWeight: 700, textAlign: "right", textTransform: "capitalize",
+              }}>{classes[i]}</th>
+              {row.map((val, j) => {
+                const isDiag = i === j;
+                const intensity = val / max;
+                const bg = isDiag
+                  ? `rgba(34, 197, 94, ${0.15 + intensity * 0.55})`
+                  : `rgba(239, 68, 68, ${0.10 + intensity * 0.45})`;
+                return (
+                  <td key={j} style={{
+                    padding: "16px 24px", textAlign: "center",
+                    fontSize: 18, fontWeight: 700,
+                    background: bg,
+                    border: `1px solid ${COLORS.border}`,
+                    color: COLORS.text,
+                    minWidth: 80,
+                  }}>{val}</td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function PerClassTable({ perClass, classes }) {
+  if (!perClass || !classes) return null;
+  return (
+    <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <thead>
+        <tr style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+          <th style={{ padding: 8, textAlign: "left", color: COLORS.muted, fontSize: 11 }}>CLASS</th>
+          <th style={{ padding: 8, textAlign: "right", color: COLORS.muted, fontSize: 11 }}>PRECISION</th>
+          <th style={{ padding: 8, textAlign: "right", color: COLORS.muted, fontSize: 11 }}>RECALL</th>
+          <th style={{ padding: 8, textAlign: "right", color: COLORS.muted, fontSize: 11 }}>F1</th>
+          <th style={{ padding: 8, textAlign: "right", color: COLORS.muted, fontSize: 11 }}>SUPPORT</th>
+        </tr>
+      </thead>
+      <tbody>
+        {classes.map(cls => {
+          const m = perClass[cls] || {};
+          return (
+            <tr key={cls} style={{ borderBottom: `1px solid ${COLORS.border}` }}>
+              <td style={{ padding: 10, color: COLORS[cls] || COLORS.text, fontWeight: 700, textTransform: "capitalize" }}>{cls}</td>
+              <td style={{ padding: 10, textAlign: "right", fontFamily: "monospace" }}>{m.precision?.toFixed(3) ?? "—"}</td>
+              <td style={{ padding: 10, textAlign: "right", fontFamily: "monospace" }}>{m.recall?.toFixed(3) ?? "—"}</td>
+              <td style={{ padding: 10, textAlign: "right", fontFamily: "monospace", fontWeight: 700 }}>{m.f1?.toFixed(3) ?? "—"}</td>
+              <td style={{ padding: 10, textAlign: "right", color: COLORS.muted }}>{m.support ?? "—"}</td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 
@@ -706,7 +1053,12 @@ function Home({ health, stats, go }) {
         <HomeStat label="ROBERTA"  value={robertaPct}          sub="Transformer"  tint={COLORS.accent} />
         <HomeStat label="BEST ML"  value={bestSklearnPct}      sub={bestSklearnLabel} tint={COLORS.positive} />
         <HomeStat label="MODELS"   value={totalModels || 9}    sub="All per review" tint={COLORS.text} />
-        <HomeStat label="CONFIDENCE" value="—"                 sub="Average"      tint="#facc15" />
+        <HomeStat
+          label="CONFIDENCE"
+          value={stats?.avg_confidence != null ? `${(stats.avg_confidence * 100).toFixed(1)}%` : "—"}
+          sub="Average across reviews"
+          tint="#facc15"
+        />
       </div>
 
       {/* PROJECT TEAM */}
