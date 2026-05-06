@@ -27,9 +27,8 @@ const TABS = [
   { id: "live",     label: "Scrape Live Reviews" },
   { id: "compare",  label: "Compare" },
   { id: "upload",   label: "Upload CSV" },
-  { id: "evaluate", label: "Evaluation" },
   { id: "history",  label: "History" },
-  { id: "models",   label: "Models" },
+  { id: "models",   label: "Models & Metrics" },
 ];
 
 export default function App() {
@@ -65,7 +64,6 @@ export default function App() {
         {tab === "predict"  && <Predict />}
         {tab === "compare"  && <Compare />}
         {tab === "upload"   && <Upload />}
-        {tab === "evaluate" && <Evaluate />}
         {tab === "history"  && <History />}
         {tab === "models"   && <Models health={health} />}
       </main>
@@ -800,82 +798,6 @@ function CompareCard({ data, highlight }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-function Evaluate() {
-  const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(true);
-  const [selected, setSelected] = useState(null);
-
-  useEffect(() => {
-    setBusy(true);
-    fetch(`${API}/api/evaluate`).then(r => r.json()).then(d => {
-      setData(d);
-      // Default to ensemble_live if available
-      const first = d.ensemble_live ? "ensemble_live" : Object.keys(d.models || {})[0];
-      setSelected(first);
-      setBusy(false);
-    }).catch(() => setBusy(false));
-  }, []);
-
-  if (busy) return <Card><div style={{ color: COLORS.muted, padding: 30, textAlign: "center" }}>Evaluating models on held-out test set…</div></Card>;
-  if (!data || data.error) return <Card><div style={{ color: COLORS.negative, padding: 20 }}>{data?.error || "No evaluation data"}</div></Card>;
-
-  const all = { ...(data.models || {}) };
-  if (data.ensemble_live) all.ensemble_live = data.ensemble_live;
-  const current = all[selected] || {};
-  const classes = data.classes || ["negative", "neutral", "positive"];
-
-  return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <Card>
-        <div style={{ marginBottom: 14, color: COLORS.muted, fontSize: 13 }}>
-          Per-model evaluation on a held-out test set of <b style={{ color: COLORS.text }}>{data.test_size}</b> samples.
-          Choose a model to inspect its confusion matrix and per-class precision/recall/F1.
-        </div>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {Object.keys(all).map(key => {
-            const isLive = key === "ensemble_live";
-            return (
-              <button key={key} onClick={() => setSelected(key)} style={{
-                padding: "8px 14px", borderRadius: 8,
-                background: selected === key ? COLORS.accent : COLORS.cardLite,
-                color: COLORS.text,
-                border: `1px solid ${selected === key ? COLORS.accent : COLORS.border}`,
-                cursor: "pointer", fontSize: 12, fontWeight: 600,
-              }}>
-                {isLive ? "★ Ensemble (RoBERTa+sklearn)" : key}
-              </button>
-            );
-          })}
-        </div>
-      </Card>
-
-      {current && (
-        <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-            <KV k="Accuracy" v={current.accuracy != null ? `${(current.accuracy * 100).toFixed(2)}%` : "—"} />
-            <KV k="F1 (macro)" v={current.f1_macro != null ? current.f1_macro.toFixed(4) : "—"} />
-            {current.avg_confidence != null && (
-              <KV k="Avg confidence" v={`${(current.avg_confidence * 100).toFixed(1)}%`} />
-            )}
-            {current.n_samples != null && <KV k="Samples evaluated" v={current.n_samples} />}
-          </div>
-
-          <Card title="Confusion matrix">
-            <ConfusionMatrix matrix={current.confusion} classes={classes} />
-            <div style={{ marginTop: 12, fontSize: 11, color: COLORS.muted, textAlign: "center" }}>
-              Rows = true label · Columns = predicted label · Diagonal = correct
-            </div>
-          </Card>
-
-          <Card title="Per-class precision / recall / F1">
-            <PerClassTable perClass={current.per_class} classes={classes} />
-          </Card>
-        </>
-      )}
-    </div>
-  );
-}
-
 function ConfusionMatrix({ matrix, classes }) {
   if (!matrix || !matrix.length) return <div style={{ color: COLORS.muted }}>No data</div>;
   const flat = matrix.flat();
@@ -963,35 +885,172 @@ function PerClassTable({ perClass, classes }) {
 
 // ─────────────────────────────────────────────────────────────────────
 function Models({ health }) {
-  const metrics = health?.sklearn_metrics || {};
-  const data = Object.entries(metrics).map(([k, v]) => ({ model: k, accuracy: Math.round(v * 1000) / 10 }));
+  const [evalData, setEvalData] = useState(null);
+  const [busy, setBusy] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  useEffect(() => {
+    setBusy(true);
+    fetch(`${API}/api/evaluate`).then(r => r.json()).then(d => {
+      setEvalData(d);
+      const first = d.ensemble_live ? "ensemble_live" : Object.keys(d.models || {})[0];
+      setSelected(first);
+      setBusy(false);
+    }).catch(() => setBusy(false));
+  }, []);
+
+  // Bar chart data — combines pretrained sklearn metrics from /api/health with
+  // ensemble accuracy from /api/evaluate so the comparison is comprehensive.
+  const accData = useMemo(() => {
+    const data = [];
+    const m = health?.sklearn_metrics || {};
+    Object.entries(m).forEach(([k, v]) => {
+      data.push({
+        model: k.replace(/_/g, " ").replace("tfidf", "TF-IDF").replace("bow", "BoW"),
+        accuracy: Math.round(v * 1000) / 10,
+        kind: "sklearn",
+      });
+    });
+    if (evalData?.ensemble_live?.accuracy != null) {
+      data.push({
+        model: "★ Ensemble (RoBERTa+sklearn)",
+        accuracy: Math.round(evalData.ensemble_live.accuracy * 1000) / 10,
+        kind: "ensemble",
+      });
+    }
+    return data.sort((a, b) => b.accuracy - a.accuracy);
+  }, [health, evalData]);
+
+  const all = useMemo(() => {
+    if (!evalData) return {};
+    const out = { ...(evalData.models || {}) };
+    if (evalData.ensemble_live) out.ensemble_live = evalData.ensemble_live;
+    return out;
+  }, [evalData]);
+
+  const current = all[selected] || {};
+  const classes = evalData?.classes || ["negative", "neutral", "positive"];
+
   return (
     <div style={{ display: "grid", gap: 16 }}>
+      {/* SYSTEM OVERVIEW */}
       <Card title="System overview">
-        <ul style={{ lineHeight: 1.8, paddingLeft: 18 }}>
+        <ul style={{ lineHeight: 1.8, paddingLeft: 18, margin: 0 }}>
           <li>Real RoBERTa transformer: <code>cardiffnlp/twitter-roberta-base-sentiment-latest</code></li>
           <li>Sklearn ensemble: Logistic Regression · Naive Bayes · Random Forest · Feedforward NN — each with TF-IDF and BoW vectorizers (8 models total)</li>
-          <li>Ensemble voting: RoBERTa weight=2, each sklearn weight=1</li>
-          <li>Auto-retraining: ensemble retrains on every batch of scraped reviews using rating (when available) or RoBERTa labels as silver labels</li>
-          <li>Caching: 30-min in-DB cache by query+sources, indexed for repeat queries</li>
-          <li>Persistence: every analyzed review stored in SQLite for history + future training</li>
+          <li>Pretrained at Docker build time on NLTK movie_reviews (2k IMDB) + twitter_samples (10k tweets) + curated neutral set</li>
+          <li>Ensemble fusion: weighted vote with confidence-margin neutral correction</li>
+          <li>Persistence: every analyzed review stored in SQLite for history + retraining</li>
         </ul>
       </Card>
-      {data.length > 0 ? (
-        <Card title="Sklearn model accuracies (from last retrain)">
-          <ResponsiveContainer width="100%" height={320}>
-            <BarChart data={data} layout="vertical">
+
+      {/* MODEL ACCURACY COMPARISON */}
+      {accData.length > 0 ? (
+        <Card title="Model accuracy comparison">
+          <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 12 }}>
+            Evaluated on {evalData?.test_size || "—"} held-out samples from the pretraining corpus.
+            Higher is better.
+          </div>
+          <ResponsiveContainer width="100%" height={Math.max(280, accData.length * 36)}>
+            <BarChart data={accData} layout="vertical" margin={{ left: 10, right: 30 }}>
               <CartesianGrid stroke={COLORS.border} strokeDasharray="3 3" />
-              <XAxis type="number" domain={[0, 100]} stroke={COLORS.muted} />
-              <YAxis type="category" dataKey="model" stroke={COLORS.muted} width={180} fontSize={11} />
-              <Tooltip contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }} />
-              <Bar dataKey="accuracy" fill={COLORS.accent2} />
+              <XAxis type="number" domain={[0, 100]} stroke={COLORS.muted} unit="%" />
+              <YAxis type="category" dataKey="model" stroke={COLORS.muted} width={220} fontSize={11} />
+              <Tooltip
+                contentStyle={{ background: COLORS.card, border: `1px solid ${COLORS.border}` }}
+                formatter={(v) => `${v}%`}
+              />
+              <Bar dataKey="accuracy" radius={[0, 4, 4, 0]}>
+                {accData.map((d, i) => (
+                  <Cell key={i} fill={d.kind === "ensemble" ? COLORS.accent2 : COLORS.accent} />
+                ))}
+              </Bar>
             </BarChart>
           </ResponsiveContainer>
         </Card>
       ) : (
-        <Card><div style={{ color: COLORS.muted }}>Sklearn ensemble cold-started; scrape some reviews to trigger a real retrain.</div></Card>
+        <Card><div style={{ color: COLORS.muted, padding: 20 }}>Loading model metrics…</div></Card>
       )}
+
+      {/* CONFUSION MATRIX + PER-CLASS METRICS */}
+      <Card title="Confusion matrix & per-class metrics">
+        {busy && (
+          <div style={{ color: COLORS.muted, padding: 30, textAlign: "center" }}>
+            Loading evaluation…
+          </div>
+        )}
+        {!busy && evalData?.error && (
+          <div style={{ color: COLORS.negative, padding: 20 }}>{evalData.error}</div>
+        )}
+        {!busy && !evalData?.error && Object.keys(all).length > 0 && (
+          <>
+            <div style={{ marginBottom: 14, color: COLORS.muted, fontSize: 13 }}>
+              Choose any model to inspect its confusion matrix and precision/recall/F1.
+              The <b style={{ color: COLORS.accent2 }}>★ Ensemble</b> view shows the combined RoBERTa + sklearn fusion.
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 18 }}>
+              {Object.keys(all).map(key => {
+                const isLive = key === "ensemble_live";
+                const acc = all[key]?.accuracy;
+                return (
+                  <button key={key} onClick={() => setSelected(key)} style={{
+                    padding: "8px 14px", borderRadius: 8,
+                    background: selected === key ? COLORS.accent : COLORS.cardLite,
+                    color: COLORS.text,
+                    border: `1px solid ${selected === key ? COLORS.accent : COLORS.border}`,
+                    cursor: "pointer", fontSize: 12, fontWeight: 600,
+                    display: "flex", alignItems: "center", gap: 6,
+                  }}>
+                    <span>{isLive ? "★ Ensemble" : key}</span>
+                    {acc != null && (
+                      <span style={{
+                        fontSize: 10, color: selected === key ? "#fff" : COLORS.muted,
+                        background: selected === key ? "rgba(255,255,255,0.2)" : COLORS.card,
+                        padding: "1px 6px", borderRadius: 4,
+                      }}>{(acc * 100).toFixed(1)}%</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {current && Object.keys(current).length > 0 && (
+              <>
+                <div style={{
+                  display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))",
+                  gap: 10, marginBottom: 18,
+                }}>
+                  <KV k="Accuracy" v={current.accuracy != null ? `${(current.accuracy * 100).toFixed(2)}%` : "—"} />
+                  <KV k="F1 (macro)" v={current.f1_macro != null ? current.f1_macro.toFixed(4) : "—"} />
+                  {current.avg_confidence != null && (
+                    <KV k="Avg confidence" v={`${(current.avg_confidence * 100).toFixed(1)}%`} />
+                  )}
+                  {current.n_samples != null && <KV k="Samples evaluated" v={current.n_samples} />}
+                </div>
+
+                <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700, color: COLORS.muted, letterSpacing: 0.6 }}>
+                  CONFUSION MATRIX
+                </div>
+                <ConfusionMatrix matrix={current.confusion} classes={classes} />
+                {(!current.confusion || !current.confusion.length) && (
+                  <div style={{ color: "#facc15", padding: 16, textAlign: "center", fontSize: 13 }}>
+                    ⚠ No confusion matrix available — your build may predate the matrix capture.
+                    Trigger a fresh Railway redeploy to regenerate.
+                  </div>
+                )}
+                <div style={{ marginTop: 10, marginBottom: 24, fontSize: 11, color: COLORS.muted, textAlign: "center" }}>
+                  Rows = true label · Columns = predicted label · Diagonal cells = correct predictions
+                </div>
+
+                <div style={{ marginBottom: 8, fontSize: 12, fontWeight: 700, color: COLORS.muted, letterSpacing: 0.6 }}>
+                  PER-CLASS PRECISION / RECALL / F1
+                </div>
+                <PerClassTable perClass={current.per_class} classes={classes} />
+              </>
+            )}
+          </>
+        )}
+      </Card>
     </div>
   );
 }
